@@ -1,45 +1,40 @@
 
-After manual verification of samples from all 8 languages and the problems figured out, I took 7 metrics to evaluate our data in phase 1-
 
-SNR (Signal-to-Noise Ratio): Measures constant background hums (like AC or traffic) to prevent the AI from hallucinating words from noise.
+## Phase 1: 
 
-VAD Ratio (Voice Activity): Calculates the percentage of actual human speech, ensuring the model aligns text to voice rather than dead air.
+After manual verification of samples from all 8 languages and the problems figured out, I took 8 metrics to evaluate our data and these metrics capture the majority of bad samples from the data-
 
-ELR (Early-to-Late Ratio): Detects room echo and reverberation, preventing the model from confusing smeared word boundaries.
+* **SNR (Signal-to-Noise Ratio)**: Measures constant background hums (like AC or traffic) to prevent the model from hallucinating words from noise.
+* **VAD Ratio (Voice Activity)**: Calculates the percentage of actual human speech, ensuring the model aligns text to voice rather than dead air.
+* **ELR (Early-to-Late Ratio)**: Detects room echo and reverberation, preventing the model from confusing smeared word boundaries.
+* **Clipping Rate**: Identifies digital distortion from audio being recorded too loud, catching "blown-out" files where speech data is permanently destroyed.
+* **Waveform Kurtosis**: Detects sudden, extreme audio spikes, preventing the model from mistaking mic pops or table bumps for hard consonants.
+* **Spectral Flatness**: Differentiates structured human speech from pure white noise, filtering out files that are mostly drone sounds or static.
+* **ZCR (Zero-Crossing Rate)**: Measures sound wave vibration frequency to catch excessive hissing or high-pitched electronic whines from faulty equipment.
+* **Silence Ratio**: Calculates the percentage of absolute dead air to flag recordings with excessively long pauses.
 
-Clipping Rate: Identifies digital distortion from audio being recorded too loud, catching "blown-out" files where speech data is permanently destroyed.
+This [threshold_decision.py](./threshold_decision.py) takes the samples of 4000 audio (~10% of total audio samples from 8 languages) from each language and resamples them to 16KHz for mathematical comparison.  It chops the audio into 30ms frame and calculates 8 distinct acoustic 
+metrics.  Use Parallel processing to handle thousands of files rapidly.
 
-Waveform Kurtosis: Detects sudden, extreme audio spikes, preventing the model from mistaking mic pops or table bumps for hard consonants (like 'P' or 'T').
+It uses 6 Analytical plots - Boxplots, Histogram, Retention Curves, Heatmaps, IQR spread and Radar chart are applied on each of the 8 metrics and for each language are plotted and plots are saved.  It are made to help me decide between Global vs Per-language quality thresholds.
 
-Spectral Flatness: Differentiates structured human speech from pure white noise, filtering out files that are mostly drone sounds or static.
 
-ZCR (Zero-Crossing Rate): Measures sound wave vibration frequency to catch excessive hissing or high-pitched electronic whines from faulty equipment.
-
-Silence Ratio: Calculates the percentage of absolute dead air to flag recordings with excessively long pauses (though it's usually redundant if you use VAD).
-
-To ensure high-quality Automatic Speech Recognition (ASR) training for the IndicVoices dataset, we ran a comprehensive acoustic profiling suite across 8 languages. Because recording environments and phonetic structures vary drastically across languages, we analyzed 6 key visualizations to design a **Hybrid Data Curation Pipeline**. This approach removes noisy or broken audio without accidentally introducing language bias (e.g., unfairly deleting all data from a specific language simply because it was recorded in the field).
-
-Here are the core inferences and our final curation strategy.
-
-### 🔍 1. Key Inferences from Acoustic Visualizations
+### Key Inferences from Acoustic Visualizations
 
 #### A. Global vs. Per-Language Behavior
 * **Visual Evidence:** [Boxplots per Language](./plots/01_boxplots_per_language.png) & [Histograms](./plots/02_histograms_all_languages.png)
-* **Mathematical Proof:** [Cross-Language IQR Spread](./plots/05_iqr_spread_per_metric.png)
 * **Insight:** Metrics like `ZCR`, `Waveform Kurtosis`, `Spectral Flatness`, and `ELR` are structurally stable across all languages (CV < 0.25). However, **VAD Ratio** (Voice Activity) and **SNR** (Signal-to-Noise) vary wildly. For instance, applying a global VAD threshold of >0.6 would preserve almost all Tamil data but delete over 40% of Hindi data.
 * **Decision:** We must use **Per-Language** thresholds and normalization for VAD Ratio and SNR, while relying on **Global** thresholds for the remaining metrics.
 
 #### B. Redundant Metrics & Hard Failures
 * **Visual Evidence:** [Metric Correlation Heatmap](./plots/04_correlation_heatmap.png)
-* **Insight:** `VAD Ratio` and `Silence Ratio` are almost perfectly inversely correlated ($r = -0.91$). Using both over-penalizes the exact same audio flaw. Additionally, `Clipping Rate` has roughly zero correlation with acoustic metrics because it is a hardware-level digital error.
+* **Insight:** `VAD Ratio` and `Silence Ratio` are almost perfectly inversely correlated ($r = -0.91). Using both over-penalizes the exact same audio flaw. Additionally, `Clipping Rate` has roughly zero correlation with acoustic metrics because it is a hardware-level digital error.
 * **Decision:** Completely drop `Silence Ratio` from the evaluation score. Treat `Clipping Rate` as a binary "Hard Reject" rather than a weighted metric.
 
 #### C. Language-Specific Quirks
 * **Visual Evidence:** [Language Quality Fingerprints (Radar)](./plots/06_radar_language_profiles.png) & [Retention Curves](./plots/03_retention_curves.png)
 * **Insight:** Bengali exhibits a uniquely high Zero-Crossing Rate (ZCR) compared to the median dataset shape. 
 * **Decision:** When scoring ZCR globally, the penalty weight must be gentle enough not to disproportionately decimate the Bengali subset.
-
----
 
 ### 🛠️ 2. The Final Curation Pipeline (The "Soft Score")
 
@@ -68,3 +63,6 @@ We calculate a final Audio Quality Soft Score using the following weights, prior
 | **Kurtosis** | **5%** | Minor penalty for sudden mic pops/clicks. | Global |
 
 **Execution:** We sort the resulting dataset by this combined Soft Score and prune the bottom 20% globally. Because VAD and SNR were normalized per-language, this safely removes the lowest-quality audio *without* erasing inherently quieter or different-paced languages.
+
+---
+
