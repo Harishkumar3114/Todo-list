@@ -23,7 +23,7 @@ It uses 6 Analytical plots - Boxplots, Histogram, Retention Curves, Heatmaps, IQ
 
 #### A. Global vs. Per-Language Behavior
 * **Visual Evidence:** [Boxplots per Language](./plots/01_boxplots_per_language.png) & [Histograms](./plots/02_histograms_all_languages.png)
-* **Insight:** Metrics like `ZCR`, `Waveform Kurtosis`, `Spectral Flatness`, and `ELR` are structurally stable across all languages (CV < 0.25). However, **VAD Ratio** (Voice Activity) and **SNR** (Signal-to-Noise) vary wildly. For instance, applying a global VAD threshold of >0.6 would preserve almost all Tamil data but delete over 40% of Hindi data.
+* **Insight:** Metrics like `Waveform Kurtosis`, `Spectral Flatness`, and `ELR` are structurally stable across all languages (CV < 0.25). However, **VAD Ratio** (Voice Activity) and **SNR** (Signal-to-Noise) vary wildly. For instance, applying a global VAD threshold of >0.6 would preserve almost all Tamil data but delete over 40% of Hindi data.
 * **Decision:** We must use **Per-Language** thresholds and normalization for VAD Ratio and SNR, while relying on **Global** thresholds for the remaining metrics.
 
 #### B. Redundant Metrics & Hard Failures
@@ -34,35 +34,37 @@ It uses 6 Analytical plots - Boxplots, Histogram, Retention Curves, Heatmaps, IQ
 #### C. Language-Specific Quirks
 * **Visual Evidence:** [Language Quality Fingerprints (Radar)](./plots/06_radar_language_profiles.png) & [Retention Curves](./plots/03_retention_curves.png)
 * **Insight:** Bengali exhibits a uniquely high Zero-Crossing Rate (ZCR) compared to the median dataset shape. 
-* **Decision:** When scoring ZCR globally, the penalty weight must be gentle enough not to disproportionately decimate the Bengali subset.
+* **Decision:** ZCR must be moved to the **Per-Language** normalization group so Bengali audio is only evaluated against its own linguistic baseline.
 
-### 🛠️ 2. The Final Curation Pipeline (The "Soft Score")
+---
+
+
+### The Final Curation Pipeline (Soft Score)
 
 Based on the inferences above, we process and filter the audio in three distinct steps:
 
 #### Step 1: The Hard Filters (Immediate Rejection)
-Before calculating any complex scores, we drop audio that is structurally unusable for ASR:
+Before calculating any complex scores, we drop audio:
+**Drop if** `duration > 0.3`
 * **Drop if** `clipping_rate > 0.05` (Heavy digital distortion / blown-out audio).
-* **Drop if** `vad_ratio < 0.10` (Essentially dead air; negligible human speech).
+* **Drop if** `vad_ratio < lang_median_vad × 0.4` (Essentially dead air; negligible human speech).
 
 #### Step 2: Hybrid Normalization (0.0 to 1.0)
 To combine different units (dB, percentages, raw floats) into a single score, we normalize all metrics to a `0.0` (Worst) to `1.0` (Best) scale. 
-* **Per-Language Normalization:** `vad_ratio` and `snr_db`. (e.g., A Hindi file is only compared against the Min/Max of other Hindi files).
-* **Global Normalization:** `c50_db` (ELR), `spectral_flatness`, `zcr`, and `kurtosis`. (Compared against the Min/Max of the entire dataset).
+* **Per-Language Normalization:** `vad_ratio`, `snr_db`, and `zcr`. Required because these metrics have high natural variance across languages (CV > 0.25). A global scale would unfairly penalize and disproportionately delete data from outlier languages like Hindi and Bengali.
+
+* **Global Normalization:** `c50_db` (ELR), `spectral_flatness`, and `kurtosis`.  These metrics showed structural stability across all languages (CV < 0.25), meaning a reverberant recording sounds equally degraded regardless of the language being spoken. Normalizing these globally is both correct and efficient.
 
 #### Step 3: The Weighted Soft Score
-We calculate a final Audio Quality Soft Score using the following weights, prioritized by their impact on ASR training:
+We calculate a final Audio Quality Soft Score using the following weights, prioritized by their impact on Speech Model training:
 
-| Metric | Weight | Importance for ASR | Normalization Type |
+| Metric | Weight | Importance | Normalization Type |
 | :--- | :--- | :--- | :--- |
-| **SNR (WADA)** | **40%** | Background noise is the #1 cause of ASR hallucinations. | Per-Language |
-| **VAD Ratio** | **30%** | Ensures the model trains on actual phonemes, not silence. | Per-Language |
+| **SNR (WADA)** | **40%** | Background noise is the #1 cause of model hallucinations. | **Per-Language** |
+| **VAD Ratio** | **30%** | Ensures the model trains on actual phonemes, not silence. | **Per-Language** |
 | **ELR (c50_db)**| **10%** | Rejects heavily reverberant (echoey) room recordings. | Global |
 | **Spectral Flatness** | **10%** | Identifies pure white-noise files. | Global |
-| **ZCR** | **5%** | Minor penalty for excessive hissing/static. | Global |
+| **ZCR** | **5%** | Minor penalty for excessive hissing/static. | **Per-Language** |
 | **Kurtosis** | **5%** | Minor penalty for sudden mic pops/clicks. | Global |
 
-**Execution:** We sort the resulting dataset by this combined Soft Score and prune the bottom 20% globally. Because VAD and SNR were normalized per-language, this safely removes the lowest-quality audio *without* erasing inherently quieter or different-paced languages.
-
----
-
+**Execution:** After computing the soft scores, we apply a specific, data-driven quality threshold independently for each language. Because highly variable metrics (VAD, SNR, and ZCR) are normalized per language, the soft score accurately reflects a file's quality relative to its own linguistic baseline. To determine the exact cutoff for each language, we analyze its retention curve to identify the natural inflection point—the precise score where a genuine drop in acoustic quality occurs. Any file scoring below this threshold is discarded.
