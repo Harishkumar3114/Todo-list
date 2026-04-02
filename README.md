@@ -107,7 +107,7 @@ WEIGHTS = {
 ---
 
 
-## Validation
+### Validation
 
 The final configuration was validated against three criteria before being accepted:
 
@@ -125,4 +125,43 @@ threshold (scores 0.40–0.50) and 15 files just above it (scores 0.50–0.60) c
 files below the threshold had audibly worse quality — background noise, low speech density,
 or both — compared to files above it.
 
+**4. Rejection Rate:** Currently we have the rejection rate ~5%, we need to pass the remaining data that passed this phase to our Whisper model and SpeechBrain model.
 ---
+
+
+## Bonus Phase (ASR done using Whisper):
+
+Phase 1 successfully filtered out audio with structural and acoustic flaws (noise, dead air, distortion), it could not verify if the audio actually matched the provided text. A file might have perfect studio quality but contain the wrong speaker, hallucinated text, or a completely mismatched transcript.  This phase somewhat resolves it, since it is Indic data, the model performance is mid.
+
+This phase is a scalable, multi-stage audio filtering pipeline that uses Whisper transcription and Character Error Rate (CER) to evaluate and filter audio-text pairs.
+
+This pipeline processes a dataset of audio samples which comes as output of phase x (filtered_manifest.json) and determines whether each sample is valid or noisy/misaligned based on transcription quality.
+
+`Audio File → Transcription (Whisper) → CER Computation → Filtering`
+
+### Threshold tuning and inference:
+* Initially the **CER Threshold was set to 0.3**, and less than **1%** of the audio is accepted.  This is because the model can't capture fast spoken or incomplete words from the audio, this rejects lot of samples.
+
+* Then I tuned the value and listened to the accepted and rejected audio and finalised **CER threshold to 0.7.**
+
+### Reason for High CER Leniency:
+
+* Model vs. Language Complexity: I am using faster-whisper, a general-purpose multilingual model, on highly diverse Indic language datasets. Whisper's baseline accuracy for Indic scripts is naturally lower than for English due to complex tokenization, regional dialects, and frequent code-mixing (e.g. using English loan words in Hindi or Tamil).
+
+* Acoustic Validity: Manual inspection and visual plot confirmed that files scoring between 0.30 and 0.70 CER were actually perfectly valid, high-quality human speech. Whisper was simply making spelling errors, dropping fast phonemes, or struggling with localized pronunciations. 
+
+### Rejection rate:
+* Leniency of 0.7 CER is set, the model **rejects 40%** of the bad audio samples and keeps **60%** back.  
+* Through manual verification of removed samples it is working perfectly that transcripts don't accurately match for noisy and unclear audio.
+* The Whisper model did a good job in filtering out bad samples with a decent CER threshold.
+
+
+## Key Insights and Final Inference:
+
+* The Indic dataset consist of lot of low-mid samples which is found using manual listening to sample of audio and found out most prominent problems in audio samples.
+* Developed a hybrid Soft Score pipeline, applying per-language normalization to highly variable metrics (VAD, SNR) and global normalization to structural flaws.
+* Set the rejection threshold to a inflection point (0.50), safely pruning dead air and toxic noise without erasing naturally slower or hissier languages.
+* Applying a global Voice Activity (VAD) threshold of > 0.60 would preserve almost all Tamil data but unfairly delete over 40% of Hindi data, proving the absolute necessity of per-language normalization.
+* Shifting the baseline Soft Score rejection threshold from 0.40 to the CDF's natural quality cliff at 0.50 corrected an artificially low 2.2% rejection rate to a more accurate ~5% rejection rate.
+* Calibrated the Character Error Rate (CER) threshold to 0.70, purging catastrophic transcript mismatches while forgiving Whisper's baseline struggles with complex Indic dialects.
+* **The Final Impact:** The two-phase pipeline guarantees a sanitized, densely voiced, and accurately transcribed dataset that is strictly balanced and primed for robust ASR training.
